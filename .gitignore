@@ -1,0 +1,4 @@
+# Ignore General Backup Files
+*pyc
+*~
+*#
