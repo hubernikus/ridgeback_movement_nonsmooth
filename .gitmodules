@@ -1,0 +1,4 @@
+[submodule "scripts/dynamic_obstacle_avoidance"]
+	path = scripts/dynamic_obstacle_avoidance
+	url = https://github.com/hubernikus/dynamic_obstacle_avoidance.git
+	branch = python2
