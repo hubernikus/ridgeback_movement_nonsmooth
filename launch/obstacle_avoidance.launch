@@ -1,0 +1,10 @@
+<launch>
+  <node pkg="ridgeback_movement" type="transfomr_publisher.py" name="transfomr_publisher.py" ns="obstacle_avoidance_optitrack"/>
+
+  <!-- <node pkg="ridgeback_movement" type="obstacle_avoidance_optitrack.py" name="obstacle_avoidance_optitrack.py" ns="obstacle_avoidance_optitrack"/> -->
+
+  <!-- <node pkg="rviz" type="rviz" name="rviz" ns="obstacle_avoidance_optitrack"/> -->
+  <!-- <\node> -->
+  <!-- <groupe name="avoidance"> -->
+  <!-- <\groupe> -->
+</launch>
