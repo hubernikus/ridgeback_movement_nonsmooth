@@ -133,7 +133,7 @@ class SensoryTreatment():
 
         self.points_lidar_2d = self.points_lidar_2d[:, ind_good]
         angle_lidar = np.arctan2(self.points_lidar_2d[1, :], self.points_lidar_2d[0, :])
-        
+v        
         # Front scan data
         n_points_frontScan = len(self.data_frontScan.ranges)
         front_scan_data = np.array(self.data_frontScan.ranges)

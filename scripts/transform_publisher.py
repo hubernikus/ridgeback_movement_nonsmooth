@@ -59,11 +59,15 @@ print("... finished importing libraries")
 
 class TransformPublisher_odom(): 
 
-    def __init__(self):
+    def __init__(self, agent_topic_name='ridgeback'):
         print("")
         print("Initializiation starting.\n")
 
         rospy.init_node('transform_publisher', anonymous=True)
+
+        self.awaiting_msg_agent = True
+        self.data_agent = None        
+        rospy.Subscriber("/vrpn_client_node/"+ agent_topic_name +"/pose", PoseStamped, self.callback_agent_optitrack)
 
         # Use ridgeback-time stamp for messages
         self.ridgeback_stamp = None
@@ -71,18 +75,21 @@ class TransformPublisher_odom():
         rospy.Subscriber("/imu/data", Imu, self.callback_imu) # get timestamp
 
         # START LOOP
-        while (self.awaiting_msg_imu:
+        while ((self.awaiting_msg_imu or self.awaiting_msg_agent)
                and not rospy.is_shutdown()):
             # import pdb; pdb.set_trace() # BREAKPOINT        
             print("Waiting for stamp message ...")
             rospy.sleep(0.25)
-        
+
         self.tf_listener = tf.TransformListener()
         self.tf_broadcast = tf2.TransformBroadcaster()
 
         rate = rospy.Rate(50) # 10 Hz
         print("Entering main loop....")
+
         while not rospy.is_shutdown():
+            # lock.acquire()
+            use_ridgeback_stamp = True
             if use_ridgeback_stamp:
                 time_stamp = self.ridgeback_stamp
             else:
@@ -138,11 +145,12 @@ class TransformPublisher_odom():
             # trafo_lab2optitrack.header.stamp = rospy.Time.now()
             trafo_lab2optitrack.header.frame_id = "world_lab"
             trafo_lab2optitrack.child_frame_id = "world_optitrack"
-            trafo_lab2optitrack.transform.translation.x = 1.0
-            trafo_lab2optitrack.transform.translation.y = -3
-            trafo_lab2optitrack.transform.translation.z = 0
+            trafo_lab2optitrack.transform.translation.x = 0.0
+            trafo_lab2optitrack.transform.translation.y = 0.0
+            trafo_lab2optitrack.transform.translation.z = 0.0
 
-            q = tf.transformations.quaternion_from_euler(0, 0, -9./180*pi)
+            # q = tf.transformations.quaternion_from_euler(0, 0, -9./180*pi)
+            q = tf.transformations.quaternion_from_euler(0, 0, 0)
             trafo_lab2optitrack.transform.rotation.x = q[0]
             trafo_lab2optitrack.transform.rotation.y = q[1]
             trafo_lab2optitrack.transform.rotation.z = q[2]
@@ -155,10 +163,13 @@ class TransformPublisher_odom():
             trafo_0.child_frame_id = "world"
             trafo_0.transform.rotation.w = 1
             self.tf_broadcast.sendTransform(trafo_0)
+            # lock.release()
 
             # return True
 
             rate.sleep()
+
+            # print('loop')
 
         
     def callback_imu(self, data):
@@ -174,22 +185,27 @@ class TransformPublisher_odom():
 
         lock.release()        
 
+    def callback_agent_optitrack(self, data):
+        lock.acquire()
+
+        self.data_agent = data
+        if self.awaiting_msg_agent:
+            self.awaiting_msg_agent = False
+            print("Got 1st agent pose")
+
+        lock.release()        
+
+
 
 if __name__==('__main__'):
     print("Starting node")
     
-    if len(sys.argv)>=2:
-        n_obstacles = int(sys.argv[1])
-    else:
-        # print("WARNING - no obstacle number was given. Default value n=0 is chosen")
-        n_obstacles = None
-
     try:
-        ObstacleAvoidance_optitrack_int = ObstacleAvoidance_optitrack(n_obstacles)
+        TransformPublisher_odom()
     except rospy.ROSInterruptException:
         pass        
     # Instance_SensoryTreatment.listener()
 
 print("")
 print("")
-print("Finished cleanly...")
+print("Finished <<transoform_publisher.py>>  cleanly...")
