@@ -5,7 +5,7 @@ Do the following steps:
 
 In your catkin src directory clone the repository
 ```
-git clone https://github.com/epfl-lasa/kuka-lwr-ros.git
+git clone https://github.com/hubernikus/ridgeback_movement_nonsmooth.git
 ```
 
 
@@ -14,7 +14,7 @@ Set rosmaster to ridgeback in
 
 SSH onto the ridgeback
 ```
-administrator -X @172.16.0.135
+ssh -X administrator@172.16.0.135
 ```
 PW: ridgeback
 

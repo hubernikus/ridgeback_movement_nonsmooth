@@ -51,12 +51,32 @@ if not path_obstacle_avoidance in sys.path:
     sys.path.append(path_obstacle_avoidance)
 
 from dynamic_obstacle_avoidance.obstacle_avoidance.obstacle import *
+from dynamic_obstacle_avoidance.obstacle_avoidance.ellipse_obstacles import Ellipse
 from dynamic_obstacle_avoidance.obstacle_avoidance.obstacle_polygon import Cuboid, Polygon
 from dynamic_obstacle_avoidance.obstacle_avoidance.linear_modulations import * 
 
 print("... finished importing libraries")
 
-def define_obstacles_lab_south(obstacle_number):
+
+# @staticmethod
+def quaternion_from_2vectors(vec1, vec2=None):
+    if vec2==None:
+        vec2 = vec1
+        vec1 = np.zeros(vec2.shape)
+        vec1[0] = 1
+
+    # Normalize?
+    quat = np.zeros(4)
+    quat[0] = np.linalg.norm(vec1)*np.linalg.norm(vec2) + np.dot(vec1, vec2) # w
+
+    if vec1.shape[0]==2: # 2D projection
+        quat[3] = np.cross(vec1, vec2) # vec
+    else:
+        quat[1:] = np.cross(vec1, vec2) # vec
+    return quat/np.linalg.norm(quat)
+
+
+def define_obstacles_lab_south(obstacle_number, robot_radius=0.53, exponential_weight=0.1):
     # TODO create json file for obstacle description.
     if obstacle_number ==-2:
         edge_points = np.array((
@@ -64,42 +84,55 @@ def define_obstacles_lab_south(obstacle_number):
              [ 0.2, 0.2,-1.0,-1.0]]))
 
         frame_id = "world_lab"
-        obs = Polygon(edge_points=edge_points, is_boundary=True)
+        obs = Polygon(edge_points=edge_points, is_boundary=True, margin_absolut=robot_radius, sigma=exponential_weight)
         
         # Displacement
         obs.center_position += np.array([0.0, 0.0])
         obs.orientation += 0./180*pi
-
         return obs
 
     if obstacle_number ==-1:
         edge_points = np.array((
-            [4.0, 1.0, 1.0, 1.0, 0.0,0.0,-4.0,-4.0,-2.5,-2.5, 0.0, 0.0, 4.0],
-            [0.0, 0.0, 1.0, 1.0, 1.0,1.5,1.5,-2.0,-2.0,-3.5,-3.5,-3.0,-3.0 ]))
+            # [4.0, 1.0, 1.0, 0.0, 0.0,-4.0,-4.0,-2.5,-2.5, 0.0, 0.0, 4.0],
+            # [0.0, 0.0, 1.0, 1.0, 1.6, 1.6,-2.0,-2.0,-3.6,-3.6,-3.0,-3.0])
+            [4.0, 3.5, 3.5,-0.5, 0.0,-4.0,-4.0,-2.5,-2.5, 0.0, 0.0, 4.0],
+            [0.0, 0.0, 2.0, 2.0, 1.6, 1.6,-2.0,-2.0,-3.6,-3.6,-3.0,-3.0])
+)
 
         # edge_points = np.array((
             # [100.0,-100.0,-100.0, 100.0],
             # [100.0, 100.0, -100.0,-100.0]))
 
         frame_id = "world_lab"
-        obs = Polygon(edge_points=edge_points, is_boundary=True)
+        obs = Polygon(edge_points=edge_points, is_boundary=True, margin_absolut=robot_radius, sigma=exponential_weight)
         
         # Displacement
-        obs.center_position += np.array([0.8, -1.3])
-        obs.orientation += -56./180*pi
-
+        obs.center_position += np.array([-2.4, 0])
+        obs.orientation += 0.5/180*pi
         return obs
 
-    if obstacle_number== 0:
-        # Tool-Trolley
-        obs = Cuboid(axes_length=[0.8,0.3])
-                     
+    if obstacle_number==0:
+        # Human
+        obs = Cuboid(axes_length=[1.0, 1.0], margin_absolut=robot_radius, sigma=exponential_weight, name='coworker')
+        obs.is_static = False
         return obs
 
     if obstacle_number==1:
-        # Human
-        obs = Ellipse(axes_length=[0.6, 0.3], p=[2,2]) 
+        # Table
+        obs = Cuboid(axes_length=[0.8,0.3], center_position=[2, -1], margin_absolut=robot_radius, sigma=exponential_weight, name='kuka')
+        obs.is_static = True
+        return obs
 
+    if obstacle_number==2:
+        # Table
+        obs = Cuboid(axes_length=[1.5, 0.2], center_position=[1, -1], margin_absolut=robot_radius, sigma=exponential_weight, name='table')
+        obs.is_static = True
+        return obs
+
+    if obstacle_number==3:
+        # Table
+        obs = Cuboid(axes_length=[0.8, 0.8], center_position=[-2, 1], margin_absolut=robot_radius, sigma=exponential_weight, name='franka')
+        obs.is_static = True
         return obs
 
     return 
@@ -118,25 +151,34 @@ class ObstacleAvoidance_optitrack():
     n_rows_lidar = 16 
     ang_resolution = 600
 
-    def __init__(self, n_obstacles=None):
+    def __init__(self, n_dynamic_obstacles=None, n_static_obstacles=3):
         print("")
         print("Initializiation starting.\n")
 
         rospy.init_node('Sensory_Treatement', anonymous=True)
         self.node_is_active = True
 
-        if n_obstacles is None:
-            self.obstacle_topic_names = ['obstacle', 'hat']
-            self.n_obstacles = len(self.obstacle_topic_names)
+        # First obstacles are dynamic
+        if n_dynamic_obstacles is None:
+            # self.obstacle_topic_names = ['obstacle', 'hat']
+            # self.obstacle_topic_names = ['obstacle0', 'obstacle1']
+            self.obstacle_topic_names = ['obstacle0']
+            self.n_dynamic_obstacles = len(self.obstacle_topic_names)
         else:
-            self.n_obstacles = n_obstacles
-            self.obstacle_topic_names = ['obstacles'+str(ii) for ii in range(self.n_obstacles)]
+            self.n_dynamic_obstacles = n_dynamic_obstacles
+            self.obstacle_topic_names = ['obstacle'+str(ii) for ii in range(self.n_obstacles)] # 
 
+        self.awaiting_msg_obstacles = [True]*self.n_dynamic_obstacles
+
+        # Static obstacles
+        self.n_obstacles = self.n_dynamic_obstacles + n_static_obstacles
+        self.obstacles = []
+        for oo in range(self.n_obstacles):
+            self.obstacles.append(define_obstacles_lab_south(oo))
+            
         # Callbacks and Subscribers
-        self.awaiting_msg_obstacles = [True]*self.n_obstacles
-        self.awaiting_msg_agent = True
 
-        self.data_agent = None        
+        # self.data_agent = None        
         self.data_obstacle = [None]*(self.n_obstacles+1) # + boundary
 
         # Use ridgeback-time stamp for messages
@@ -144,55 +186,63 @@ class ObstacleAvoidance_optitrack():
         self.awaiting_msg_imu = True
         rospy.Subscriber("/imu/data", Imu, self.callback_imu) # get timestamp
 
-        self.topic_agent = "/vrpn_client_node/ridgeback/pose"
-        rospy.Subscriber(self.topic_agent, PoseStamped, self.callback_agent_optitrack)
+        # self.topic_agent = "/vrpn_client_node/ridgeback0/pose"
+        # rospy.Subscriber(self.topic_agent, PoseStamped, self.callback_agent_optitrack)
+
         self.topic_obstacles = [0]*self.n_obstacles
-        for oo, obs_str in izip(range(self.n_obstacles), self.obstacle_topic_names):
+        for oo, obs_str in izip(range(self.n_dynamic_obstacles), self.obstacle_topic_names):
             self.topic_obstacles[oo] = "vrpn_client_node/"+ obs_str +"/pose"
             print("Topic " + str(oo) + " :" + self.topic_obstacles[oo])
             rospy.Subscriber(self.topic_obstacles[oo], PoseStamped, self.callback_obstacle_optitrack, oo)
 
-
         # Publisher
         # pub_test = rospy.Publisher('test_point_cloud', PointCloud2 , queue_size=5)
         # self.pub_occGrid = rospy.Publisher('occupancy_grid', OccupancyGrid , queue_size=5)
-        self.pub_modVel = rospy.Publisher('occupancy_grid', OccupancyGrid , queue_size=5)
         self.pub_eeVel_modulated = rospy.Publisher('cmd_vel', Twist, queue_size=5)
         
+        # Visualization
+        self.pub_eeVel_initial_pose = rospy.Publisher("/ridgeback/inital_ds", PoseStamped, queue_size=5)
+        self.pub_eeVel_modulated_pose = rospy.Publisher("/ridgeback/modulated_ds", PoseStamped, queue_size=5)
+        
         # Create obstacles and publisher
-        self.obstacles = []
         self.pub_obstacles = []
+        self.pub_obstacles_hull = []
         self.pub_obstacles_axis = []
 
         for oo in range(self.n_obstacles):
             self.pub_obstacles.append(rospy.Publisher("polygon_obstacle"+str(oo), PolygonStamped, queue_size=5))
+            self.pub_obstacles_hull.append(rospy.Publisher("polygon_hull_obstacle"+str(oo), PolygonStamped, queue_size=5))
             self.pub_obstacles_axis.append(rospy.Publisher("axis_obstacle"+str(oo), PoseStamped, queue_size=5))
-            self.obstacles.append(define_obstacles_lab_south(oo))
 
         # self.pub_obstacles.append(rospy.Publisher("polygon_wall", PolygonStamped, queue_size=5))
         self.pub_obstacles.append(rospy.Publisher("polygon_wall", Path, queue_size=10))
+        self.pub_obstacles_hull.append(rospy.Publisher("polygon_hull_wall", Path, queue_size=10))
+
         self.obstacles.append(define_obstacles_lab_south(-1))
 
         self.tf_listener = tf.TransformListener()
         self.tf_broadcast = tf2.TransformBroadcaster()
 
-        self.rate = rospy.Rate(50) # 10 Hz
+        # self.rate = rospy.Rate(50) # Hz
+        self.rate = rospy.Rate(5) # Hz
 
         self.pos_obstacles = [0]*self.n_obstacles        
         self.orient_obstacles = [0]*self.n_obstacles
 
         self.obstacles[-1].draw_obstacle() # Draw boundary
+        
+        self.it_attractor = 0
+        self.attractor_list = np.array([[0, 1, 0],
+                                        [0, 0, 1]]) # Define default attractor
 
-        self.attractor = np.array([0,0]) # Define default attractor
-
-        while ((any(self.awaiting_msg_obstacles) or self.awaiting_msg_agent)
+        while (any(self.awaiting_msg_obstacles) 
                and not rospy.is_shutdown()):
             print("Waiting for messages ...")
-            for ii in range(self.n_obstacles):
+            for ii in range(self.n_dynamic_obstacles):
                 if self.awaiting_msg_obstacles[ii]:
                     print('.. awaiting obstacle', self.obstacle_topic_names[ii])
-            if self.awaiting_msg_agent:
-                print('.. awaiting agent')
+            # if self.awaiting_msg_agent:
+                # print('.. awaiting agent')
             rospy.sleep(0.25)
             
     def run(self):
@@ -201,29 +251,30 @@ class ObstacleAvoidance_optitrack():
         while not rospy.is_shutdown():
             lock.acquire() ##### LOCK ACQUIRE ######
             try:
-                (self.pos_agent, self.orient_agent) = self.tf_listener.lookupTransform('/world_optitrack', '/ridgeback', rospy.Time(0))
-                
-                for oo in range(self.n_obstacles):
+                (self.pos_agent, self.orient_agent) = self.tf_listener.lookupTransform('/world_optitrack', '/base_link', rospy.Time(0))
+                for oo in range(self.n_obstacles_dynamic):
                     (self.pos_obstacles[oo], self.orient_obstacles[oo]) = self.tf_listener.lookupTransform('/world_optitrack', '/'+ self.obstacle_topic_names[oo], rospy.Time(0))
+                
             except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                print('No luck today for the mighty transform scout...')
+                # import pdb; pdb.set_trace()
                 lock.release(); self.rate.sleep(); continue
 
             # Update obstacle position
             for oo in range(len(self.obstacles)-1):
                 # orientation to
                 euler = tf.transformations.euler_from_quaternion(self.orient_obstacles[oo])
-                
+                # print('obs #{} - orienation={}deg -- pos=[{}, {}]'.format(oo, np.round(euler[0]*180/pi,2), np.round(self.pos_obstacles[oo][0],2), np.round(self.pos_obstacles[oo][1],2)))
+
                 self.obstacles[oo].update_position_and_orientation(
                     position=[self.pos_obstacles[oo][0],self.pos_obstacles[oo][1]],
                     orientation=euler[0])
-                self.obstacles[oo].draw_obstacle()
-                # print('obs #{}'.format(oo), self.obstacles[oo].center_position)
-            
+
             # Publish obstacle visualization
             for oo in range(len(self.obstacles)-1):
                 obstacle = PoseStamped()
                 obstacle.header.frame_id = "world_lab"
-                obstacle.header.stamp = self.ridgeback_stamp
+                obstacle.header.stamp = self.ridgeback_stamp # Time issues -> take ridgeback_stamp
                 obstacle.pose.position.x, obstacle.pose.position.y = self.obstacles[oo].center_position[0], self.obstacles[oo].center_position[1]
                 # obstacle.pose.position.z = 0
                 q = tf.transformations.quaternion_from_euler(0, 0, self.obstacles[oo].orientation)
@@ -235,38 +286,75 @@ class ObstacleAvoidance_optitrack():
                 
                 obstacle_polygon = PolygonStamped()
                 obstacle_polygon.header.frame_id = "world_lab"
-                obstacle_polygon.header.stamp = self.ridgeback_stamp
-                for pp in range(self.obstacles[oo].x_obs.shape[0]):
-                    point = Point32(self.obstacles[oo].x_obs[pp, 0], self.obstacles[oo].x_obs[pp, 1], 0)
+                obstacle_polygon.header.stamp = self.ridgeback_stamp # Time issues -> take ridgeback_stamp
+
+                surface_points = self.obstacles[oo].x_obs 
+                for pp in range(surface_points.shape[1]):
+                    point = Point32(surface_points[0, pp], surface_points[1, pp], 0)
                     obstacle_polygon.polygon.points.append(point)
-                
                 self.pub_obstacles[oo].publish(obstacle_polygon)
+
+                # Surface polygon with  with margin
+                obstacle_polygon = PolygonStamped()
+                obstacle_polygon.header.frame_id = "world_lab"
+                obstacle_polygon.header.stamp = self.ridgeback_stamp # Time issues -> take ridgeback_stamp
+
+                surface_points = self.obstacles[oo].x_obs_sf
+                for pp in range(surface_points.shape[1]): # 
+                    point = Point32(surface_points[0, pp], surface_points[1, pp], 0)
+                    obstacle_polygon.polygon.points.append(point)
+                self.pub_obstacles_hull[oo].publish(obstacle_polygon)
+
             
-            # Only last obstacle in the list is a path
+            # Only wall visualization (last obstacle of the list) is a <<path>> message
             for oo in [len(self.obstacles)-1]:
                 obstacle_path = Path()
                 obstacle_path.header.frame_id = "world_lab"
-                # obstacle_path.header.stamp = rospy.Time.now()
-                obstacle_path.header.stamp = self.ridgeback_stamp
-                for pp in range(self.obstacles[oo].x_obs.shape[0]):
+                # obstacle_path.header.stamp = rospy.Time.now() 
+                obstacle_path.header.stamp = self.ridgeback_stamp # Time issues -> take ridgeback_stamp
+
+                surface_points = self.obstacles[oo].x_obs
+                for pp in range(surface_points.shape[1]): # 
                     point_pose = PoseStamped()
                     point_pose.header.frame_id = obstacle_path.header.frame_id
                     point_pose.header.stamp = obstacle_path.header.stamp
-                    point_pose.pose.position.x = float(self.obstacles[oo].x_obs[pp, 0])
-                    point_pose.pose.position.y = float(self.obstacles[oo].x_obs[pp, 1])
+                    point_pose.pose.position.x, point_pose.pose.position.y = float(surface_points[0, pp]), float(surface_points[1, pp])
                     obstacle_path.poses.append(point_pose)
-                # print('path # ' +  str(oo) )
+
                 self.pub_obstacles[oo].publish(obstacle_path)
                 
+                # Points With margin
+                obstacle_path = Path()
+                obstacle_path.header.frame_id = "world_lab"
+                # obstacle_path.header.stamp = rospy.Time.now()
+                obstacle_path.header.stamp = self.ridgeback_stamp # Time issues -> take ridgeback_stamp
 
+                surface_points = self.obstacles[oo].x_obs_sf
+                for pp in range(surface_points.shape[1]): # 
+                    point_pose = PoseStamped()
+                    point_pose.header.frame_id = obstacle_path.header.frame_id # Needed?
+                    point_pose.header.stamp = obstacle_path.header.stamp
+                    point_pose.pose.position.x, point_pose.pose.position.y = float(surface_points[0, pp]), float(surface_points[1, pp])
+                    obstacle_path.poses.append(point_pose)
+
+                self.pub_obstacles_hull[oo].publish(obstacle_path)
 
             # Modulation
             # publish_linear_ds(self, position, attractor, max_vel=0.07, slow_down_dist=0.1, publish_ros_message=False)
             # publish_modulated_ds(self, position, velocity, obstacles, max_vel=0.07, slow_down_dist=0.1, publish_ros_message=True)
+            # import pdb; pdb.set_trace()
 
             ##### Obstacle Avoidance Algorithm #####
+            attractor_is_reached = self.toggle_attractor(position=self.pos_agent)
+
+            if attractor_is_reached:
+                print("Switch attractor to {}".format(self.attractor))
+                
             linear_ds = self.publish_linear_ds(position=self.pos_agent, attractor=self.attractor)
             modulated_ds = self.publish_modulated_ds(self.pos_agent, linear_ds, self.obstacles)
+            ### Visualize
+            self.visualize_ds(position=self.pos_agent, initial_ds=linear_ds, modulated_ds=modulated_ds, time_stamp=self.ridgeback_stamp)
+
             ##### Finihsed #####
 
             lock.release() ##### LOCK RELEASE ######
@@ -275,7 +363,57 @@ class ObstacleAvoidance_optitrack():
             self.rate.sleep()
 
         print("Exiting main loop")
+    
+    @property
+    def attractor(self):
+        return self.attractor_list[:, self.it_attractor]
+        # if True:
+            # attr = self.obstacles[-1].transform_relative2global(attr)
 
+    def toggle_attractor(self, position, attraction_dist=0.1, random_attr=True):
+        dist = np.linalg.norm(self.attractor-position[:2])
+        
+        if (dist<attraction_dist):
+            if random_attr:
+                min_vals = np.min(self.obstacles[-1].edge_points, axis=0)
+                max_vals = np.min(self.obstacles[-1].edge_points, axis=0)
+
+                in_free_space =  False
+                while not in_free_space:
+                    new_point = np.random.rand(2)*(max_vals-min_vals)+min_vals
+
+                    in_free_space = obs_check_collision(new_point)
+                    in_free_space = in_free_space[0] # Reshape
+                self.attractor_list = new_point.reshape(self.dim, 1)
+                self.it_attractor = 0 # Keep 1
+
+            else:
+                self.it_attractor += 1
+            return True
+        else:
+            return False
+
+
+    def visualize_ds(self, position, initial_ds, modulated_ds, time_stamp=None):
+        msg = PoseStamped()
+        if time_stamp is None:
+            msg.header.stamp = rospy.Time.now()
+        else:
+            msg.header.stamp = time_stamp
+        msg.header.frame_id = '/world_lab'
+        msg.pose.position.x, msg.pose.position.y = position[0], position[1]
+        
+        # Initial DS
+        orientation = quaternion_from_2vectors(np.array([1, 0]), initial_ds)
+        msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z = tuple(orientation)
+        self.pub_eeVel_initial_pose.publish(msg)
+        
+        # Modulated DS
+        orientation = quaternion_from_2vectors(np.array([1, 0]),  modulated_ds)
+        msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z = tuple(orientation)
+        self.pub_eeVel_modulated_pose.publish(msg)
+
+        
     def publish_linear_ds(self, position, attractor, max_vel=0.07, slow_down_dist=0.1, publish_ros_message=False):
         position = np.array([position[0], position[1]])
         linear_ds = attractor-position
@@ -285,6 +423,7 @@ class ObstacleAvoidance_optitrack():
             raise NotImplementedError()
 
         return linear_ds
+
 
     def publish_modulated_ds(self, position, velocity, obstacles, max_vel=0.07, slow_down_dist=0.1, publish_ros_message=True):
         if len(obstacles): # nonzero
@@ -317,7 +456,7 @@ class ObstacleAvoidance_optitrack():
         return vel
 
 
-    def callback_obstacle_optitrack(self, data, obstacle_number=0):
+    def callback_obstacle_optitrack(self, data, obstacle_number):
         lock.acquire()
 
         self.data_obstacle[obstacle_number] = data
@@ -326,19 +465,30 @@ class ObstacleAvoidance_optitrack():
             self.awaiting_msg_obstacles[obstacle_number] = False
             print("Got first obstacle #{}".format(obstacle_number))
 
+        # if True and obstacle_number==0:
+            # quat = [data.pose.orientation.w,
+                    # data.pose.orientation.x,
+                    # data.pose.orientation.y,
+                    # data.pose.orientation.z]
+            # print('orienation of obs#{} = {}'.format(obstacle_number, np.round(quat, 2)))
         lock.release()
 
+    # def callback_agent_optitrack(self, data):
+        # lock.acquire()
+        # self.data_agent = data
+        # if self.awaiting_msg_agent:
+            # self.awaiting_msg_agent = False
+            # print("Got 1st agent pose")
+        # lock.release()
 
-    def callback_agent_optitrack(self, data):
-        lock.acquire()
-
-        self.data_agent = data
-        if self.awaiting_msg_agent:
-            self.awaiting_msg_agent = False
-            print("Got 1st agent pose")
-
-        lock.release()        
-
+    # def callback_agent_pose(self, data):
+        # Agent pose given by the 'transform publisher'
+        # lock.acquire()
+        # self.data_agent = data
+        # if self.awaiting_msg_agent:
+            # self.awaiting_msg_agent = False
+            # print("Got 1st agent pose")
+        # lock.release()        
         
     def callback_imu(self, data):
         # There is a problem with the clocks ridgeback/computer. 
@@ -382,8 +532,6 @@ class ObstacleAvoidance_optitrack():
 if __name__==('__main__'):
     print("Starting node")
 
-    
-    
     if len(sys.argv)>=2:
         n_obstacles = int(sys.argv[1])
     else:
