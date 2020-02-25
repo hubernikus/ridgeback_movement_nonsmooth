@@ -47,9 +47,15 @@ plt.ion()
 from obstacle_avoidance_optitrack import quaternion_from_2vectors
 
 # OBSTACLE AVOIDANCE LIBRARY
-path_obstacle_avoidance = "/home/lukas/catkin_ws/src/ridgeback_movement/scripts/dynamic_obstacle_avoidance/src"
+# path_obstacle_avoidance = "/home/lukas/catkin_ws/src/ridgeback_movement/scripts/dynamic_obstacle_avoidance/src"
+path_obstacle_avoidance = "/home/lukas/ridgeback_ws/src/ridgeback_movement/scripts/dynamic_obstacle_avoidance/src"
 if not path_obstacle_avoidance in sys.path:
     sys.path.append(path_obstacle_avoidance)
+
+# path_obstacle_avoidance = "/home/lukas/ridgeback_ws/src/ridgeback_movement/scripts/"
+# if not path_obstacle_avoidance in sys.path:
+    # sys.path.append(path_obstacle_avoidance)
+
 
 from dynamic_obstacle_avoidance.obstacle_avoidance.obstacle import *
 from dynamic_obstacle_avoidance.obstacle_avoidance.obstacle_polygon import Cuboid, Polygon
@@ -75,7 +81,7 @@ class TransformPublisher_odom():
         # Use ridgeback-time stamp for messages
         self.ridgeback_stamp = None
         self.awaiting_msg_imu = True
-        rospy.Subscriber("/imu/data", Imu, self.callback_imu) # get timestamp
+        rospy.Subscriber("/imu/data", Imu, self.callback_imu) # Get timestamp
 
         self.tf_listener = tf.TransformListener()
         self.tf_broadcast = tf2.TransformBroadcaster()
@@ -133,7 +139,6 @@ class TransformPublisher_odom():
 
             if self.n_agent_topics==1:
                 quat = [self.data_agent[0].pose.orientation.w, self.data_agent[0].pose.orientation.x, self.data_agent[0].pose.orientation.y, self.data_agent.pose.orientation.z]
-
             elif self.n_agent_topics==2:
                 y_dir_ridgeback = marker_positions[:, 1] - marker_positions[:, 0]
                 y_dir_ridgeback[2] = 0 # remove z deviation
@@ -143,16 +148,17 @@ class TransformPublisher_odom():
                 quat = quaternion_from_2vectors(y_dir_init, y_dir_ridgeback)
             else:
                 raise NotImplementedError()
-            
+
+            delta_dist = [0, -0.0, 0]
             trafo_optitrack2base_link_clone = TransformStamped() 
             trafo_optitrack2base_link_clone.header.stamp = time_stamp # Time delay of clocks - use ridgeback-message stamp to bridge this
             # trafo_optitrack2base_link_clone.header.stamp = rospy.Time.now()
             trafo_optitrack2base_link_clone.header.frame_id = "world_optitrack"
             trafo_optitrack2base_link_clone.child_frame_id = "base_link_clone"
             # import pdb; pdb.set_trace() # BREAKPOINT      
-            trafo_optitrack2base_link_clone.transform.translation.x = center_position[0]
-            trafo_optitrack2base_link_clone.transform.translation.y = center_position[1]
-            trafo_optitrack2base_link_clone.transform.translation.z = 0
+            trafo_optitrack2base_link_clone.transform.translation.x = center_position[0] + delta_dist[0]
+            trafo_optitrack2base_link_clone.transform.translation.y = center_position[1] + delta_dist[1]
+            trafo_optitrack2base_link_clone.transform.translation.z = 0 + delta_dist[2]
 
             trafo_optitrack2base_link_clone.transform.rotation.w = quat[0]
             trafo_optitrack2base_link_clone.transform.rotation.x = quat[1]
@@ -161,7 +167,7 @@ class TransformPublisher_odom():
 
             self.tf_broadcast.sendTransform(trafo_optitrack2base_link_clone)
 
-            # LAB to optitrack
+            # LAB to optitrack  [ set values MANUALLY]
             trafo_lab2optitrack = TransformStamped()
             trafo_lab2optitrack.header.stamp = time_stamp
             # trafo_lab2optitrack.header.stamp = rospy.Time.now()
@@ -171,8 +177,8 @@ class TransformPublisher_odom():
             trafo_lab2optitrack.transform.translation.y = 0.0
             trafo_lab2optitrack.transform.translation.z = 0.0
 
-            # q = tf.transformations.quaternion_from_euler(0, 0, -9./180*pi)
-            q = tf.transformations.quaternion_from_euler(0, 0, 0)
+            q = tf.transformations.quaternion_from_euler(0, 0, -8./180*pi)
+            # q = tf.transformations.quaternion_from_euler(0, 0, 0)
             trafo_lab2optitrack.transform.rotation.x = q[0]
             trafo_lab2optitrack.transform.rotation.y = q[1]
             trafo_lab2optitrack.transform.rotation.z = q[2]

@@ -46,14 +46,21 @@ plt.ion()
 # import pdb; pdb.set_trace() # BREAKPOINT
 
 # OBSTACLE AVOIDANCE LIBRARY
-path_obstacle_avoidance = "/home/lukas/catkin_ws/src/ridgeback_movement/scripts/dynamic_obstacle_avoidance/src"
+# path_obstacle_avoidance = "/home/lukas/catkin_ws/src/ridgeback_movement/scripts/dynamic_obstacle_avoidance/src"
+path_obstacle_avoidance = "/home/lukas/ridgeback_ws/src/ridgeback_movement/scripts/dynamic_obstacle_avoidance/src"
 if not path_obstacle_avoidance in sys.path:
     sys.path.append(path_obstacle_avoidance)
+
+from dynamic_obstacle_avoidance.obstacle_avoidance.obstacle_container import *
 
 from dynamic_obstacle_avoidance.obstacle_avoidance.obstacle import *
 from dynamic_obstacle_avoidance.obstacle_avoidance.ellipse_obstacles import Ellipse
 from dynamic_obstacle_avoidance.obstacle_avoidance.obstacle_polygon import Cuboid, Polygon
 from dynamic_obstacle_avoidance.obstacle_avoidance.linear_modulations import * 
+
+from dynamic_obstacle_avoidance.obstacle_avoidance.obs_common_section import *
+from dynamic_obstacle_avoidance.obstacle_avoidance.obs_dynamic_center_3d import get_dynamic_center_obstacles
+
 
 print("... finished importing libraries")
 
@@ -95,9 +102,9 @@ def define_obstacles_lab_south(obstacle_number, robot_radius=0.53, exponential_w
         edge_points = np.array((
             # [4.0, 1.0, 1.0, 0.0, 0.0,-4.0,-4.0,-2.5,-2.5, 0.0, 0.0, 4.0],
             # [0.0, 0.0, 1.0, 1.0, 1.6, 1.6,-2.0,-2.0,-3.6,-3.6,-3.0,-3.0])
-            [4.0, 3.5, 3.5,-0.5, 0.0,-4.0,-4.0,-2.5,-2.5, 0.0, 0.0, 4.0],
-            [0.0, 0.0, 2.0, 2.0, 1.6, 1.6,-2.0,-2.0,-3.6,-3.6,-3.0,-3.0])
-)
+            [3.8, 3.8,-0.5,-0.5, 0.2, 0.2, 3.8],
+            [0.0, 2.0, 2.0,-0.8,-0.8,-2.0,-2.0]
+        ))
 
         # edge_points = np.array((
             # [100.0,-100.0,-100.0, 100.0],
@@ -113,27 +120,28 @@ def define_obstacles_lab_south(obstacle_number, robot_radius=0.53, exponential_w
 
     if obstacle_number==0:
         # Human
-        obs = Cuboid(axes_length=[1.0, 1.0], margin_absolut=robot_radius, sigma=exponential_weight, name='coworker')
+        obs = Ellipse(axes_length=[0.35, 0.15], margin_absolut=robot_radius, sigma=exponential_weight, name='coworker')
         obs.is_static = False
         return obs
 
     if obstacle_number==1:
         # Table
-        obs = Cuboid(axes_length=[0.8,0.3], center_position=[2, -1], margin_absolut=robot_radius, sigma=exponential_weight, name='kuka')
+        obs = Cuboid(axes_length=[1.0, 1.0], center_position=[0.3, -1.70], margin_absolut=robot_radius, sigma=exponential_weight, name='kuka')
         obs.is_static = True
         return obs
 
     if obstacle_number==2:
         # Table
-        obs = Cuboid(axes_length=[1.5, 0.2], center_position=[1, -1], margin_absolut=robot_radius, sigma=exponential_weight, name='table')
+        obs = Cuboid(axes_length=[0.8, 1.8], center_position=[-0.65, -1.35], margin_absolut=robot_radius, sigma=exponential_weight, name='table')
         obs.is_static = True
         return obs
 
     if obstacle_number==3:
         # Table
-        obs = Cuboid(axes_length=[0.8, 0.8], center_position=[-2, 1], margin_absolut=robot_radius, sigma=exponential_weight, name='franka')
+        obs = Cuboid(axes_length=[0.8, 1.8], center_position=[1.18, 0.86], margin_absolut=robot_radius, sigma=exponential_weight, name='table_computer')
         obs.is_static = True
         return obs
+
 
     return 
 
@@ -172,7 +180,7 @@ class ObstacleAvoidance_optitrack():
 
         # Static obstacles
         self.n_obstacles = self.n_dynamic_obstacles + n_static_obstacles
-        self.obstacles = []
+        self.obstacles = ObstacleContainer()
         for oo in range(self.n_obstacles):
             self.obstacles.append(define_obstacles_lab_south(oo))
             
@@ -218,6 +226,7 @@ class ObstacleAvoidance_optitrack():
         self.pub_obstacles.append(rospy.Publisher("polygon_wall", Path, queue_size=10))
         self.pub_obstacles_hull.append(rospy.Publisher("polygon_hull_wall", Path, queue_size=10))
 
+        self.obstacles.index_wall = len(self.obstacles)
         self.obstacles.append(define_obstacles_lab_south(-1))
 
         self.tf_listener = tf.TransformListener()
@@ -229,7 +238,8 @@ class ObstacleAvoidance_optitrack():
         self.pos_obstacles = [0]*self.n_obstacles        
         self.orient_obstacles = [0]*self.n_obstacles
 
-        self.obstacles[-1].draw_obstacle() # Draw boundary
+        for oo in range(len(self.obstacles)):
+            self.obstacles[oo].draw_obstacle() # Draw boundary
         
         self.it_attractor = 0
         self.attractor_list = np.array([[0, 1, 0],
@@ -252,20 +262,26 @@ class ObstacleAvoidance_optitrack():
             lock.acquire() ##### LOCK ACQUIRE ######
             try:
                 (self.pos_agent, self.orient_agent) = self.tf_listener.lookupTransform('/world_optitrack', '/base_link', rospy.Time(0))
-                for oo in range(self.n_obstacles_dynamic):
-                    (self.pos_obstacles[oo], self.orient_obstacles[oo]) = self.tf_listener.lookupTransform('/world_optitrack', '/'+ self.obstacle_topic_names[oo], rospy.Time(0))
                 
-            except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                for oo in range(self.n_dynamic_obstacles):
+                    (self.pos_obstacles[oo], self.orient_obstacles[oo]) = self.tf_listener.lookupTransform('/world_optitrack', '/'+ self.obstacle_topic_names[oo], rospy.Time(0))
+                    
+            except:
                 print('No luck today for the mighty transform scout...')
-                # import pdb; pdb.set_trace()
                 lock.release(); self.rate.sleep(); continue
+                import pdb; pdb.set_trace()
 
+            # except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                # print('No luck today for the mighty transform scout...')
+                # import pdb; pdb.set_trace()
+                
             # Update obstacle position
-            for oo in range(len(self.obstacles)-1):
-                # orientation to
-                euler = tf.transformations.euler_from_quaternion(self.orient_obstacles[oo])
+            for oo in range(self.n_dynamic_obstacles):
+                try:
+                    euler = tf.transformations.euler_from_quaternion(self.orient_obstacles[oo])
+                except:
+                    import pdb; pdb.set_trace()
                 # print('obs #{} - orienation={}deg -- pos=[{}, {}]'.format(oo, np.round(euler[0]*180/pi,2), np.round(self.pos_obstacles[oo][0],2), np.round(self.pos_obstacles[oo][1],2)))
-
                 self.obstacles[oo].update_position_and_orientation(
                     position=[self.pos_obstacles[oo][0],self.pos_obstacles[oo][1]],
                     orientation=euler[0])
@@ -288,7 +304,7 @@ class ObstacleAvoidance_optitrack():
                 obstacle_polygon.header.frame_id = "world_lab"
                 obstacle_polygon.header.stamp = self.ridgeback_stamp # Time issues -> take ridgeback_stamp
 
-                surface_points = self.obstacles[oo].x_obs 
+                surface_points = self.obstacles[oo].x_obs
                 for pp in range(surface_points.shape[1]):
                     point = Point32(surface_points[0, pp], surface_points[1, pp], 0)
                     obstacle_polygon.polygon.points.append(point)
@@ -345,6 +361,13 @@ class ObstacleAvoidance_optitrack():
             # import pdb; pdb.set_trace()
 
             ##### Obstacle Avoidance Algorithm #####
+            # Worksapce udpate
+                # Adjust dynamic center
+            automatic_reference_point = True
+            if automatic_reference_point:
+                intersection_obs = get_intersections_obstacles(self.obstacles)
+                get_dynamic_center_obstacles(self.obstacles, intersection_obs)
+            
             attractor_is_reached = self.toggle_attractor(position=self.pos_agent)
 
             if attractor_is_reached:
