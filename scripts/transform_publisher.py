@@ -63,6 +63,22 @@ from dynamic_obstacle_avoidance.obstacle_avoidance.linear_modulations import *
 
 print("... finished importing libraries")
 
+# rotate vector v1 by quaternion q1 
+def quat_vec_multiplication(q1, v1):
+    ''' Input q1=[w, x, y, z]'''
+    mag_v1 = np.linalg.norm(v1)
+    if mag_v1==0:
+        return v1
+    q1 = q1[1:].tolist() + [q1[0]]
+    v1 = tf.transformations.unit_vector(v1)
+    q2 = list(v1)
+    q2.append(0.0)
+    v1_rotated = tf.transformations.quaternion_multiply(tf.transformations.quaternion_multiply(q1, q2), tf.transformations.quaternion_conjugate(q1))[:3]
+
+    # if np.isnan(sum(v1_rotated)):
+        # import pdb; pdb.set_trace()
+    return np.array(v1_rotated)*mag_v1
+
 
 class TransformPublisher_odom(): 
     def __init__(self, agent_topic_names=['ridgeback2', 'ridgeback1']):
@@ -89,8 +105,11 @@ class TransformPublisher_odom():
         # START LOOP
         while ((self.awaiting_msg_imu or np.sum(self.awaiting_msg_agent))
                and not rospy.is_shutdown()):
-            # import pdb; pdb.set_trace() # BREAKPOINT        
-            print("Waiting for stamp message ...")
+            # import pdb; pdb.set_trace() # BREAKPOINT
+            if self.awaiting_msg_imu:
+                print("Waiting for imu-stamp message ...")
+            if np.sum(self.awaiting_msg_agent):
+                print("Waiting for robot-message ...")
             rospy.sleep(0.25)
 
         rate = rospy.Rate(100) # Hz
@@ -149,21 +168,21 @@ class TransformPublisher_odom():
             else:
                 raise NotImplementedError()
 
-            delta_dist = [0, -0.0, 0]
+            delta_dist = [0.395, 0.06, 0]
+            delta_dist = quat_vec_multiplication(quat, delta_dist)
             trafo_optitrack2base_link_clone = TransformStamped() 
             trafo_optitrack2base_link_clone.header.stamp = time_stamp # Time delay of clocks - use ridgeback-message stamp to bridge this
             # trafo_optitrack2base_link_clone.header.stamp = rospy.Time.now()
             trafo_optitrack2base_link_clone.header.frame_id = "world_optitrack"
             trafo_optitrack2base_link_clone.child_frame_id = "base_link_clone"
-            # import pdb; pdb.set_trace() # BREAKPOINT      
             trafo_optitrack2base_link_clone.transform.translation.x = center_position[0] + delta_dist[0]
             trafo_optitrack2base_link_clone.transform.translation.y = center_position[1] + delta_dist[1]
-            trafo_optitrack2base_link_clone.transform.translation.z = 0 + delta_dist[2]
+            trafo_optitrack2base_link_clone.transform.translation.z = 0
 
             trafo_optitrack2base_link_clone.transform.rotation.w = quat[0]
             trafo_optitrack2base_link_clone.transform.rotation.x = quat[1]
             trafo_optitrack2base_link_clone.transform.rotation.y = quat[2]
-            trafo_optitrack2base_link_clone.transform.rotation.z = quat[2]
+            trafo_optitrack2base_link_clone.transform.rotation.z = quat[3]
 
             self.tf_broadcast.sendTransform(trafo_optitrack2base_link_clone)
 
@@ -177,8 +196,8 @@ class TransformPublisher_odom():
             trafo_lab2optitrack.transform.translation.y = 0.0
             trafo_lab2optitrack.transform.translation.z = 0.0
 
-            q = tf.transformations.quaternion_from_euler(0, 0, -8./180*pi)
-            # q = tf.transformations.quaternion_from_euler(0, 0, 0)
+            # q = tf.transformations.quaternion_from_euler(0, 0, -8./180*pi)
+            q = tf.transformations.quaternion_from_euler(0, 0, 0)
             trafo_lab2optitrack.transform.rotation.x = q[0]
             trafo_lab2optitrack.transform.rotation.y = q[1]
             trafo_lab2optitrack.transform.rotation.z = q[2]

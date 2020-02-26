@@ -61,6 +61,7 @@ from dynamic_obstacle_avoidance.obstacle_avoidance.linear_modulations import *
 from dynamic_obstacle_avoidance.obstacle_avoidance.obs_common_section import *
 from dynamic_obstacle_avoidance.obstacle_avoidance.obs_dynamic_center_3d import get_dynamic_center_obstacles
 
+from dynamic_obstacle_avoidance.obstacle_avoidance.angle_math import angle_difference_directional
 
 print("... finished importing libraries")
 
@@ -141,9 +142,8 @@ def define_obstacles_lab_south(obstacle_number, robot_radius=0.53, exponential_w
         obs = Cuboid(axes_length=[0.8, 1.8], center_position=[1.18, 0.86], margin_absolut=robot_radius, sigma=exponential_weight, name='table_computer')
         obs.is_static = True
         return obs
+    return
 
-
-    return 
 
 def rosquat2array(q):
     return np.array([q.w, q.x, q.y, q.z])
@@ -159,7 +159,7 @@ class ObstacleAvoidance_optitrack():
     n_rows_lidar = 16 
     ang_resolution = 600
 
-    def __init__(self, n_dynamic_obstacles=None, n_static_obstacles=3):
+    def __init__(self, n_dynamic_obstacles=None, n_static_obstacles=3, robot_radius=0.53):
         print("")
         print("Initializiation starting.\n")
 
@@ -226,14 +226,16 @@ class ObstacleAvoidance_optitrack():
         self.pub_obstacles.append(rospy.Publisher("polygon_wall", Path, queue_size=10))
         self.pub_obstacles_hull.append(rospy.Publisher("polygon_hull_wall", Path, queue_size=10))
 
+        self.robot_radius = robot_radius
+        self.ridgeback_obs = Ellipse(center_position=[0, 0], axes_length=[self.robot_radius, self.robot_radius])
         self.obstacles.index_wall = len(self.obstacles)
-        self.obstacles.append(define_obstacles_lab_south(-1))
+        self.obstacles.append(define_obstacles_lab_south(-1, robot_radius=self.robot_radius))
 
         self.tf_listener = tf.TransformListener()
         self.tf_broadcast = tf2.TransformBroadcaster()
 
         # self.rate = rospy.Rate(50) # Hz
-        self.rate = rospy.Rate(5) # Hz
+        self.rate = rospy.Rate(20) # Hz
 
         self.pos_obstacles = [0]*self.n_obstacles        
         self.orient_obstacles = [0]*self.n_obstacles
@@ -256,15 +258,16 @@ class ObstacleAvoidance_optitrack():
             rospy.sleep(0.25)
             
     def run(self):
+        self.is_first_loop = True
         print("Starting main loop....")
         # START MAIN LOOP
         while not rospy.is_shutdown():
             lock.acquire() ##### LOCK ACQUIRE ######
             try:
-                (self.pos_agent, self.orient_agent) = self.tf_listener.lookupTransform('/world_optitrack', '/base_link', rospy.Time(0))
+                (self.pos_agent, self.orient_agent) = self.tf_listener.lookupTransform('/world_lab', '/base_link', rospy.Time(0))
                 
                 for oo in range(self.n_dynamic_obstacles):
-                    (self.pos_obstacles[oo], self.orient_obstacles[oo]) = self.tf_listener.lookupTransform('/world_optitrack', '/'+ self.obstacle_topic_names[oo], rospy.Time(0))
+                    (self.pos_obstacles[oo], self.orient_obstacles[oo]) = self.tf_listener.lookupTransform('/world_lab', '/'+ self.obstacle_topic_names[oo], rospy.Time(0))
                     
             except:
                 print('No luck today for the mighty transform scout...')
@@ -277,14 +280,19 @@ class ObstacleAvoidance_optitrack():
                 
             # Update obstacle position
             for oo in range(self.n_dynamic_obstacles):
-                try:
-                    euler = tf.transformations.euler_from_quaternion(self.orient_obstacles[oo])
-                except:
-                    import pdb; pdb.set_trace()
-                # print('obs #{} - orienation={}deg -- pos=[{}, {}]'.format(oo, np.round(euler[0]*180/pi,2), np.round(self.pos_obstacles[oo][0],2), np.round(self.pos_obstacles[oo][1],2)))
+                euler = tf.transformations.euler_from_quaternion(self.orient_obstacles[oo])
+                # print('euler obs', euler)
                 self.obstacles[oo].update_position_and_orientation(
                     position=[self.pos_obstacles[oo][0],self.pos_obstacles[oo][1]],
-                    orientation=euler[0])
+                    orientation=euler[2], # TOOD: really 2nd? element
+                    reset=self.is_first_loop)
+
+            euler = tf.transformations.euler_from_quaternion(self.orient_agent)
+            # print('euler', euler)
+            self.ridgeback_obs.update_position_and_orientation(
+                position=[self.pos_agent[0], self.pos_agent[1]],
+                orientation=euler[2], # TOOD: really 2nd? element
+                reset=self.is_first_loop)
 
             # Publish obstacle visualization
             for oo in range(len(self.obstacles)-1):
@@ -363,25 +371,51 @@ class ObstacleAvoidance_optitrack():
             ##### Obstacle Avoidance Algorithm #####
             # Worksapce udpate
                 # Adjust dynamic center
+            time_start = time.time()
             automatic_reference_point = True
             if automatic_reference_point:
                 intersection_obs = get_intersections_obstacles(self.obstacles)
                 get_dynamic_center_obstacles(self.obstacles, intersection_obs)
+            delta_time = time.time() - time_start
+            print("Workspace creation took {}s".format(delta_time))
             
-            attractor_is_reached = self.toggle_attractor(position=self.pos_agent)
+            attractor_is_reached = self.toggle_attractor(position=self.ridgeback_obs.position)
 
             if attractor_is_reached:
                 print("Switch attractor to {}".format(self.attractor))
                 
-            linear_ds = self.publish_linear_ds(position=self.pos_agent, attractor=self.attractor)
-            modulated_ds = self.publish_modulated_ds(self.pos_agent, linear_ds, self.obstacles)
+            linear_ds = self.publish_linear_ds(position=self.ridgeback_obs.position, attractor=self.attractor)
+
+            time_start = time.time()
+            modulated_ds = self.publish_modulated_ds(self.ridgeback_obs.position, linear_ds, self.obstacles)
+            delta_time = time.time() - time_start
+            print("Modulation creation took {}s".format(delta_time))
+
+            angular_ds = self.angular_ds(direction_desired=np.arctan2(modulated_ds[1], modulated_ds[0]), direction_init=self.ridgeback_obs.orientation)
+                                         
+
+            
+            # Send ROS message
+            publish_velocity = True
+            if publish_velocity:
+                velocity_local = self.ridgeback_obs.transform_global2relative_dir(modulated_ds)
+                # print('ds modulated', modulated_ds)
+                # print('local', velocity_local)
+                # print('orientation', self.ridgeback_obs.orientation)
+                
+                self.msg_vel = Twist()
+                self.msg_vel.linear.x, self.msg_vel.linear.y, self.msg_vel.linear.z = velocity_local[0], velocity_local[1], 0
+                self.msg_vel.angular.x, self.msg_vel.angular.y, self.msg_vel.angular.z = 0, 0, angular_ds
+                self.pub_eeVel_modulated.publish(self.msg_vel)
+
             ### Visualize
             self.visualize_ds(position=self.pos_agent, initial_ds=linear_ds, modulated_ds=modulated_ds, time_stamp=self.ridgeback_stamp)
 
-            ##### Finihsed #####
-
+            ##### Finished #####
+            self.is_first_loop = False
+            
             lock.release() ##### LOCK RELEASE ######
-
+            
             print("Loop finihsed")
             self.rate.sleep()
 
@@ -437,6 +471,16 @@ class ObstacleAvoidance_optitrack():
         self.pub_eeVel_modulated_pose.publish(msg)
 
         
+    def angular_ds(self, direction_desired, direction_init, fac_angle=5, max_angular_velocity=2*pi/5):
+        ''' Linear DS for angles'''
+        delta_angle = angle_difference_directional(direction_desired, direction_init)
+        angular_vel = fac_angle*delta_angle
+        if np.abs(angular_vel) > max_angular_velocity:
+            angular_vel = np.copysign(max_angular_velocity, angular_vel)
+            
+        return angular_vel
+
+    
     def publish_linear_ds(self, position, attractor, max_vel=0.07, slow_down_dist=0.1, publish_ros_message=False):
         position = np.array([position[0], position[1]])
         linear_ds = attractor-position
@@ -448,17 +492,12 @@ class ObstacleAvoidance_optitrack():
         return linear_ds
 
 
-    def publish_modulated_ds(self, position, velocity, obstacles, max_vel=0.07, slow_down_dist=0.1, publish_ros_message=True):
+    def publish_modulated_ds(self, position, velocity, obstacles, max_vel=0.07, slow_down_dist=0.1, publish_ros_message=True, obstacle=None, angular_velocity=0):
         if len(obstacles): # nonzero
             position = np.array([position[0], position[1]])
             velocity = obs_avoidance_interpolation_moving(position, velocity, obstacles)
             # modulated_ds = linear_ds
             velocity = self.limit_velocity(velocity, position, self.attractor)
-
-        if publish_ros_message:
-            self.msg_vel = Twist()
-            self.msg_vel.linear.x, self.msg_vel.linear.y, self.msg_vel.linear.z = velocity[0], velocity[1], 0
-            self.pub_eeVel_modulated.publish(self.msg_vel)
         
         return velocity
 
